@@ -1,27 +1,96 @@
 // One-Line Roast: The Gadget You Use Every Day
-// Writes the entry text to $MAKEFUN_OUTPUT_DIR/entry.txt (or /output/entry.txt).
-// The entry is a fixed string constant — both grader runs write identical bytes.
-// Node 22, standard library only.
+//
+// Entrypoint contract: emit exactly one roast line as
+// $MAKEFUN_OUTPUT_DIR/entry.txt, with no trailing newline, so the two
+// grader runs produce byte-identical output. The roast itself is a fixed
+// literal below; nothing here is random, generated, or fetched.
+//
+// Runtime: Node 22, standard library only, no network, deterministic.
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
-const ENTRY =
-  "My smartwatch throws a parade every time I stand up, then guilt-trips me for sitting down — all I did was walk to the fridge.";
+// ---------------------------------------------------------------------------
+// The entry
+// ---------------------------------------------------------------------------
 
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+const ROAST =
+  "My phone's face unlock recognises me everywhere except at 7 a.m., when apparently some stranger broke into my own bed.";
 
-// Gate self-check: UTF-8, 1–200 Unicode code points, not only whitespace.
-const codePoints = [...ENTRY].length;
-if (codePoints < 1 || codePoints > 200) {
-  throw new Error(
-    `entry must be 1-200 characters, got ${codePoints} characters`
-  );
+// Gate limits from the competition rules (competition.yaml).
+const GATE = { minCodePoints: 1, maxCodePoints: 200 } as const;
+
+// ---------------------------------------------------------------------------
+// Validation — gather every problem, then report them together
+// ---------------------------------------------------------------------------
+
+type Violation = string;
+
+function collectViolations(text: string): Violation[] {
+  const problems: Violation[] = [];
+  const length = Array.from(text).length;
+
+  if (length < GATE.minCodePoints || length > GATE.maxCodePoints) {
+    problems.push(
+      `length ${length} code points is outside ${GATE.minCodePoints}-${GATE.maxCodePoints}`,
+    );
+  }
+  if (/^\s*$/.test(text)) {
+    problems.push("entry is empty or whitespace only");
+  }
+  if (/[\r\n]/.test(text)) {
+    problems.push("entry must be a single line (no CR or LF)");
+  }
+  if (text !== text.trim()) {
+    problems.push("entry has leading or trailing whitespace");
+  }
+  return problems;
 }
-if (ENTRY.trim().length === 0) {
-  throw new Error("entry must not be only whitespace");
+
+function assertGate(text: string): void {
+  const problems = collectViolations(text);
+  if (problems.length > 0) {
+    throw new Error(`invalid entry: ${problems.join("; ")}`);
+  }
 }
 
-mkdirSync(outDir, { recursive: true });
-writeFileSync(join(outDir, "entry.txt"), ENTRY, "utf8");
-console.log(`wrote entry.txt (${codePoints} characters)`);
+// ---------------------------------------------------------------------------
+// Output location
+// ---------------------------------------------------------------------------
+
+function outputDir(): string {
+  const fromEnv = process.env.MAKEFUN_OUTPUT_DIR;
+  return resolve(fromEnv && fromEnv.length > 0 ? fromEnv : "/output");
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  assertGate(ROAST);
+
+  const dir = outputDir();
+  const target = resolve(dir, "entry.txt");
+  await mkdir(dir, { recursive: true });
+  await writeFile(target, ROAST, "utf8");
+
+  // Read-back verification: the bytes on disk must be exactly the entry,
+  // byte for byte — no added newline, no encoding drift. Fail loudly
+  // instead of leaving a subtly wrong file behind for the grader.
+  const written = await readFile(target);
+  const expected = Buffer.from(ROAST, "utf8");
+  if (!written.equals(expected)) {
+    throw new Error(
+      `read-back mismatch: entry.txt is ${written.length} bytes, expected ${expected.length} bytes`,
+    );
+  }
+  if (written.length > 0 && written[written.length - 1] === 0x0a) {
+    throw new Error("read-back mismatch: entry.txt ends with a newline");
+  }
+
+  // Stdout may carry a trailing newline; the file must not.
+  console.log(ROAST);
+}
+
+await main();
